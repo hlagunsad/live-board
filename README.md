@@ -2,7 +2,7 @@
 
 A real-time collaborative Kanban board. Create a board, share the link, and everyone on it sees cards added, moved, and deleted **live** — plus who else is currently viewing. No sign-up: pick a display name and you're in.
 
-**Live demo:** _(added after deploy)_
+**Live demo:** https://live-board-one.vercel.app
 
 > Open the board in two windows side by side, move a card in one, and watch it move in the other.
 
