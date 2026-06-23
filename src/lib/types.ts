@@ -3,6 +3,8 @@
 export type Board = {
   id: string;
   title: string;
+  owner_id: string | null;
+  invite_token: string;
   created_at: string;
 };
 

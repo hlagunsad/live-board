@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
+import { SessionProvider } from "@/lib/session";
 
 const display = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -25,7 +26,9 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${display.variable} ${sans.variable}`}>
-      <body>{children}</body>
+      <body>
+        <SessionProvider>{children}</SessionProvider>
+      </body>
     </html>
   );
 }

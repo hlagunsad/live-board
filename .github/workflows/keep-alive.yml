@@ -27,7 +27,7 @@ jobs:
             exit 1
           fi
           base="${SUPABASE_URL%/}"
-          curl -fsS "$base/rest/v1/boards?select=*&limit=1" \
+          curl -fsS "$base/rest/v1/keep_alive?select=id&limit=1" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -o /dev/null -w "Supabase responded: HTTP %{http_code}\n"

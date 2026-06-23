@@ -1,86 +1,31 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
-import {
-  colorForId,
-  getNameServerSnapshot,
-  getNameSnapshot,
-  getOrCreateClientId,
-  setDisplayName,
-  subscribeName,
-} from "@/lib/guest";
+import { useSession } from "@/lib/session";
+import { colorForId } from "@/lib/guest";
 import { applyChange, selectColumns } from "@/lib/board-state";
 import { positionForMove } from "@/lib/ordering";
 import type { Board, Card, CardMap, Column, PresenceUser } from "@/lib/types";
 import ColumnView from "./Column";
 import { type MoveAction } from "./Card";
 import PresenceBar from "./PresenceBar";
+import SignIn from "./SignIn";
 
 export default function BoardClient({ boardId }: { boardId: string }) {
-  // Read the guest name from localStorage in an SSR-safe way (no setState-in-effect):
-  // the server and first hydration render "" → the join gate; the client then re-reads.
-  const name = useSyncExternalStore(
-    subscribeName,
-    getNameSnapshot,
-    getNameServerSnapshot,
-  );
-
-  if (!name) return <NameGate onJoin={setDisplayName} />;
-  return <Board boardId={boardId} name={name} />;
+  const { session, loading } = useSession();
+  if (loading) return <Centered>Loading…</Centered>;
+  if (!session) return <SignIn />;
+  return <Board boardId={boardId} userId={session.user.id} email={session.user.email ?? "you"} />;
 }
 
-function NameGate({ onJoin }: { onJoin: (name: string) => void }) {
-  const [value, setValue] = useState("");
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const t = value.trim();
-    if (t) onJoin(t);
-  }
-  return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-6">
-      <form
-        onSubmit={submit}
-        className="w-full rounded-2xl border border-slate-200/70 bg-white/80 p-7 text-center shadow-sm backdrop-blur"
-      >
-        <h1 className="font-display text-2xl font-extrabold text-slate-900">
-          Join the board
-        </h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Pick a display name so others can see you here.
-        </p>
-        <input
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Display name"
-          aria-label="Display name"
-          className="mt-5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-center text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-        />
-        <button
-          type="submit"
-          className="mt-3 w-full rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 px-4 py-2.5 font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:shadow-xl"
-        >
-          Join
-        </button>
-      </form>
-    </main>
-  );
-}
+type Status = "loading" | "ready" | "noaccess" | "error";
 
-type Status = "loading" | "ready" | "notfound" | "error";
-
-function Board({ boardId, name }: { boardId: string; name: string }) {
+function Board({ boardId, userId, email }: { boardId: string; userId: string; email: string }) {
   const supabase = useMemo(() => getSupabase(), []);
-  const clientId = useMemo(() => getOrCreateClientId(), []);
+  const displayName = useMemo(() => email.split("@")[0], [email]);
 
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
@@ -104,13 +49,21 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
     }, 900);
   }, []);
 
-  // Initial load, then subscribe to one channel for card/column changes + presence.
+  // Initial load (redeeming an invite first if present), then one channel for changes + presence.
   useEffect(() => {
     let channel: RealtimeChannel | null = null;
     let cancelled = false;
 
     (async () => {
       setStatus("loading");
+
+      // Arrived via an invite link? Redeem the token to become a member before loading.
+      const invite = new URLSearchParams(window.location.search).get("invite");
+      if (invite) {
+        await supabase.rpc("join_board", { b_id: boardId, token: invite });
+        window.history.replaceState({}, "", `/board/${boardId}`);
+      }
+
       const { data: boardRow, error: bErr } = await supabase
         .from("boards")
         .select("*")
@@ -123,7 +76,8 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
         return;
       }
       if (!boardRow) {
-        setStatus("notfound");
+        // RLS hides boards you're not a member of, so this also covers "not allowed".
+        setStatus("noaccess");
         return;
       }
 
@@ -135,13 +89,11 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
 
       setBoard(boardRow as Board);
       setColumns((cols ?? []) as Column[]);
-      setCards(
-        Object.fromEntries(((crds ?? []) as Card[]).map((c) => [c.id, c])),
-      );
+      setCards(Object.fromEntries(((crds ?? []) as Card[]).map((c) => [c.id, c])));
       setStatus("ready");
 
       channel = supabase.channel(`board:${boardId}`, {
-        config: { presence: { key: clientId } },
+        config: { presence: { key: userId } },
       });
       channel
         .on(
@@ -181,8 +133,8 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
         .subscribe(async (s) => {
           if (s === "SUBSCRIBED" && channel) {
             await channel.track({
-              name,
-              color: colorForId(clientId),
+              name: displayName,
+              color: colorForId(userId),
               at: Date.now(),
             } satisfies PresenceUser);
           }
@@ -193,7 +145,7 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
       cancelled = true;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [boardId, supabase, clientId, name, flashCard]);
+  }, [boardId, supabase, userId, displayName, flashCard]);
 
   const addCard = useCallback(
     async (columnId: string, title: string) => {
@@ -267,8 +219,11 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
     [supabase],
   );
 
-  function copyLink() {
-    navigator.clipboard.writeText(window.location.href).then(() => {
+  // The invite link carries the board's secret token; any member can share it.
+  const invitePath = board ? `/board/${boardId}?invite=${board.invite_token}` : "";
+  function copyInvite() {
+    if (!invitePath) return;
+    navigator.clipboard.writeText(`${window.location.origin}${invitePath}`).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -277,12 +232,12 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
   if (status === "loading") {
     return <Centered>Loading board…</Centered>;
   }
-  if (status === "notfound") {
+  if (status === "noaccess") {
     return (
       <Centered>
-        <p className="text-slate-600">That board doesn’t exist.</p>
+        <p className="text-slate-600">You don’t have access to this board (or it doesn’t exist).</p>
         <Link href="/" className="mt-3 font-semibold text-sky-600 hover:underline">
-          ← Start a new board
+          ← Your boards
         </Link>
       </Centered>
     );
@@ -304,11 +259,12 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
           <PresenceBar users={online} />
           <button
             type="button"
-            onClick={copyLink}
-            aria-label="Copy board link"
+            onClick={copyInvite}
+            data-invite-url={invitePath}
+            aria-label="Copy invite link"
             className="rounded-full bg-slate-900 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-slate-700"
           >
-            {copied ? "Link copied ✓" : "Share"}
+            {copied ? "Invite copied ✓" : "Invite"}
           </button>
         </div>
       </header>
@@ -318,7 +274,7 @@ function Board({ boardId, name }: { boardId: string; name: string }) {
           {board?.title ?? "Board"}
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Open this link in another tab and watch changes sync in real time.
+          Share the invite link, then watch changes sync across members in real time.
         </p>
       </div>
 

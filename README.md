@@ -1,6 +1,6 @@
 # Live Board
 
-A real-time collaborative Kanban board. Create a board, share the link, and everyone on it sees cards added, moved, and deleted **live** — plus who else is currently viewing. No sign-up: pick a display name and you're in.
+A real-time collaborative Kanban board with **members-only boards**. Sign in, create boards you own, and invite others with a link — everyone with access sees cards added, moved, and deleted **live**, plus who else is currently viewing.
 
 **Live demo:** https://live-board-one.vercel.app
 
@@ -23,8 +23,9 @@ npm install
 #   NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 #   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 
-# One-time: paste supabase/migrations/0001_init.sql into the Supabase SQL editor and run it
-# (creates the tables + RLS, adds them to the realtime publication, seeds a demo board).
+# One-time: in the Supabase SQL editor run supabase/migrations/0001_init.sql then
+# 0002_auth_ownership.sql (tables + auth/ownership RLS + realtime + demo board), and turn
+# OFF "Confirm email" in Authentication → Providers → Email so sign-up logs in instantly.
 
 npm run dev        # http://localhost:3000
 npm test           # Vitest unit tests (ordering math + realtime merge)
@@ -35,5 +36,5 @@ npm run test:e2e   # Playwright (single-client CRUD + two-client realtime)
 - **Unit (Vitest):** the deterministic core — fractional/midpoint card ordering (`src/lib/ordering.ts`) and the idempotent, echo-safe realtime merge + sorted projection (`src/lib/board-state.ts`).
 - **E2E (Playwright):** one spec runs a full create → add → move → delete in a single client; the other opens **two independent browser contexts** on the same board and asserts a move in one appears in the other, with presence showing both.
 
-## A note on security
-This is a **public, shared-by-link demo**: anyone who knows a board's URL can edit it, and the RLS policies are deliberately open to the anonymous key (which is also what lets Realtime deliver changes — RLS is enforced per event). For a real product you'd add Supabase Auth, an `owner_id` / `board_members` table, and tighten the policies to `authenticated` members (a `SECURITY DEFINER is_board_member()` helper avoids policy recursion). The component and data structure stay the same — only the policies and the source of identity change.
+## Security model
+Boards are **members-only**, enforced in the database. Supabase Auth (email + password) identifies users; an `owner_id` on `boards` plus a `board_members` table records membership; and a `SECURITY DEFINER is_board_member()` helper backs every RLS policy (it reads `board_members` without policy recursion). You create boards you own and bring others in with a **tokenized invite link** — opening it calls a `SECURITY DEFINER join_board()` RPC that verifies the secret token and adds you as a member. Realtime keeps working because Postgres Changes are RLS-filtered per subscriber against the signed-in session: members receive their boards' events, non-members receive nothing. (A small public `keep_alive` table exists only so the keep-alive cron can still ping the DB now that `boards` is locked down.)
